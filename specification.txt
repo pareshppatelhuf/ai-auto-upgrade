@@ -1,0 +1,2717 @@
+# ACCELERATE DEVELOPMENT - Automated Upgrades
+
+## Project Overview
+
+This project aims to create an AI-powered system that automates the software dependency upgrade lifecycle. The system will scan repositories, analyze dependencies, predict code impacts, implement necessary changes, and validate through testing - all with minimal developer intervention.
+
+## Implementation Plan
+
+I'll provide a complete solution with code snippets for each component of the system. The solution will include AI Agent code and tool integrations that can work with either Claude or OpenAI models.
+
+## Table of Contents
+
+1. [Project Setup](#1-project-setup)
+2. [AI Agent Core](#2-ai-agent-core)
+3. [Dependency Scanning Tool](#3-dependency-scanning-tool)
+4. [Code Impact Analysis Tool](#4-code-impact-analysis-tool)
+5. [Test Generation and Validation Tool](#5-test-generation-and-validation-tool)
+6. [Pull Request Creation Tool](#6-pull-request-creation-tool)
+7. [Main Workflow Integration](#7-main-workflow-integration)
+8. [Running the Solution](#8-running-the-solution)
+9. [Next Steps and Improvements](#9-next-steps-and-improvements)
+
+## 1. Project Setup
+
+First, let's set up our project structure and install necessary dependencies.
+
+```bash
+# Create project directory
+mkdir automated-upgrades
+cd automated-upgrades
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install required packages
+pip install anthropic openai langchain pydantic python-dotenv requests packaging semver gitpython pytest
+```
+
+Create a `.env` file to store your API keys:
+
+```
+# .env
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+GITHUB_TOKEN=your_github_token
+```
+
+## 2. AI Agent Core
+
+Now, let's create the core AI agent that will orchestrate the entire process.
+
+```python
+# agent_core.py
+import os
+from typing import Dict, List, Optional, Union
+from dotenv import load_dotenv
+import anthropic
+import openai
+from pydantic import BaseModel, Field
+
+# Load environment variables
+load_dotenv()
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+class AIAgent:
+    def __init__(self, use_claude: bool = True):
+        """
+        Initialize the AI Agent with either Claude or OpenAI
+        
+        Args:
+            use_claude (bool): If True, use Claude API, otherwise use OpenAI
+        """
+        self.use_claude = use_claude
+        
+        if use_claude:
+            self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+            self.model = "claude-3-opus-20240229"
+        else:
+            self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            self.model = "gpt-4-turbo"
+            
+        self.system_prompt = """
+        You are an AI assistant specialized in automated software dependency upgrades.
+        Your task is to help developers identify, implement, and validate dependency updates
+        while minimizing security risks and developer intervention.
+        
+        You analyze dependency networks, predict code impacts, automate test creation,
+        and help create pull requests to maintain modern, secure, and compliant software systems.
+        
+        Be precise, technical, and focus on providing actionable insights.
+        """
+        
+    def send_message(self, messages: List[Message], temperature: float = 0.7) -> str:
+        """
+        Send a message to the AI model and get a response
+        
+        Args:
+            messages: List of messages in the conversation
+            temperature: Controls randomness (0.0 = deterministic, 1.0 = creative)
+            
+        Returns:
+            str: The model's response
+        """
+        if self.use_claude:
+            formatted_messages = [
+                {"role": msg.role, "content": msg.content} for msg in messages
+            ]
+            
+            response = self.client.messages.create(
+                model=self.model,
+                system=self.system_prompt,
+                messages=formatted_messages,
+                temperature=temperature,
+                max_tokens=4000
+            )
+            return response.content[0].text
+        else:
+            # Format messages for OpenAI
+            formatted_messages = [{"role": "system", "content": self.system_prompt}]
+            formatted_messages.extend([{"role": msg.role, "content": msg.content} for msg in messages])
+            
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=formatted_messages,
+                temperature=temperature,
+                max_tokens=4000
+            )
+            return response.choices[0].message.content
+
+    def analyze_upgrade_strategy(self, 
+                               project_info: Dict,
+                               dependencies: List[Dict],
+                               code_samples: Optional[List[str]] = None) -> str:
+        """
+        Analyze dependencies and suggest an upgrade strategy
+        
+        Args:
+            project_info: Information about the project
+            dependencies: List of dependencies with current and available versions
+            code_samples: Representative code samples using the dependencies
+            
+        Returns:
+            str: Upgrade strategy recommendations
+        """
+        prompt = f"""
+        Please analyze the following project and its dependencies to suggest an upgrade strategy:
+        
+        Project Information:
+        {project_info}
+        
+        Dependencies:
+        {dependencies}
+        
+        """
+        
+        if code_samples:
+            prompt += f"""
+            Code Samples:
+            {code_samples}
+            """
+            
+        prompt += """
+        For each dependency, please provide:
+        1. Risk assessment (High/Medium/Low)
+        2. Recommended version to upgrade to
+        3. Potential breaking changes to be aware of
+        4. Suggested testing approach
+        5. Implementation strategy
+        
+        Prioritize security-critical updates and minimize breaking changes.
+        """
+        
+        messages = [Message(role="user", content=prompt)]
+        return self.send_message(messages)
+    
+    def predict_code_changes(self, 
+                           dependency_name: str,
+                           current_version: str,
+                           target_version: str,
+                           api_usage_examples: List[str]) -> str:
+        """
+        Predict necessary code changes for a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            current_version: Current version
+            target_version: Target version for upgrade
+            api_usage_examples: Examples of how the API is currently used
+            
+        Returns:
+            str: Predicted code changes
+        """
+        prompt = f"""
+        Please predict the necessary code changes to upgrade {dependency_name} from version {current_version} to {target_version}.
+        
+        Here are examples of how the dependency is currently used in the codebase:
+        
+        ```
+        {api_usage_examples}
+        ```
+        
+        Please provide:
+        1. Specific code modifications needed
+        2. Any API changes between versions
+        3. Deprecated methods or classes to be aware of
+        4. Suggested replacement patterns
+        """
+        
+        messages = [Message(role="user", content=prompt)]
+        return self.send_message(messages)
+    
+    def generate_test_cases(self,
+                          dependency_name: str,
+                          changed_apis: List[Dict],
+                          existing_test_examples: Optional[List[str]] = None) -> str:
+        """
+        Generate test cases for validating a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            changed_apis: List of APIs that changed in the upgrade
+            existing_test_examples: Examples of existing tests
+            
+        Returns:
+            str: Generated test cases
+        """
+        prompt = f"""
+        Please generate test cases to validate the upgrade of {dependency_name}.
+        
+        The following APIs have changed or need special attention:
+        {changed_apis}
+        """
+        
+        if existing_test_examples:
+            prompt += f"""
+            Here are examples of existing tests:
+            
+            ```
+            {existing_test_examples}
+            ```
+            """
+            
+        prompt += """
+        Please provide:
+        1. Unit tests for critical functionality
+        2. Integration tests for component interactions
+        3. Edge cases that should be tested
+        4. Test assertions to verify correct behavior
+        
+        Format the tests as executable code that can be directly added to the test suite.
+        """
+        
+        messages = [Message(role="user", content=prompt)]
+        return self.send_message(messages, temperature=0.2)  # Lower temperature for more precise code
+    
+    def create_pr_description(self,
+                            dependency_updates: List[Dict],
+                            code_changes: Dict,
+                            test_results: Dict) -> str:
+        """
+        Generate a pull request description for dependency upgrades
+        
+        Args:
+            dependency_updates: List of dependencies being updated
+            code_changes: Summary of code changes made
+            test_results: Results of validation tests
+            
+        Returns:
+            str: Formatted pull request description
+        """
+        prompt = f"""
+        Please create a comprehensive pull request description for the following dependency upgrades:
+        
+        Dependencies being updated:
+        {dependency_updates}
+        
+        Code changes implemented:
+        {code_changes}
+        
+        Test results:
+        {test_results}
+        
+        The PR description should include:
+        1. A clear summary of the changes
+        2. Motivation for the upgrades (security, features, etc.)
+        3. Potential risks and mitigations
+        4. Testing performed
+        5. Any manual verification steps needed
+        
+        Format the description in Markdown for GitHub.
+        """
+        
+        messages = [Message(role="user", content=prompt)]
+        return self.send_message(messages)
+```
+
+## 3. Dependency Scanning Tool
+
+Let's create a tool to scan repositories for dependencies and identify upgrade candidates.
+
+```python
+# dependency_scanner.py
+import os
+import json
+import requests
+from typing import Dict, List, Optional, Tuple
+import subprocess
+import re
+from packaging import version
+import semver
+
+class DependencyScanner:
+    def __init__(self, repo_path: str):
+        """
+        Initialize the dependency scanner
+        
+        Args:
+            repo_path: Path to the repository to scan
+        """
+        self.repo_path = repo_path
+        self.github_token = os.getenv("GITHUB_TOKEN")
+        self.nvd_api_key = os.getenv("NVD_API_KEY")
+        
+    def detect_project_type(self) -> str:
+        """
+        Detect the type of project based on configuration files
+        
+        Returns:
+            str: Project type (npm, maven, pip, etc.)
+        """
+        if os.path.exists(os.path.join(self.repo_path, "package.json")):
+            return "npm"
+        elif os.path.exists(os.path.join(self.repo_path, "pom.xml")):
+            return "maven"
+        elif os.path.exists(os.path.join(self.repo_path, "requirements.txt")) or \
+             os.path.exists(os.path.join(self.repo_path, "setup.py")):
+            return "pip"
+        elif os.path.exists(os.path.join(self.repo_path, "build.gradle")) or \
+             os.path.exists(os.path.join(self.repo_path, "build.gradle.kts")):
+            return "gradle"
+        else:
+            return "unknown"
+            
+    def scan_dependencies(self) -> List[Dict]:
+        """
+        Scan the repository for dependencies
+        
+        Returns:
+            List[Dict]: List of dependencies with their details
+        """
+        project_type = self.detect_project_type()
+        
+        if project_type == "npm":
+            return self._scan_npm_dependencies()
+        elif project_type == "pip":
+            return self._scan_pip_dependencies()
+        elif project_type == "maven":
+            return self._scan_maven_dependencies()
+        elif project_type == "gradle":
+            return self._scan_gradle_dependencies()
+        else:
+            raise ValueError(f"Unsupported project type: {project_type}")
+            
+    def _scan_npm_dependencies(self) -> List[Dict]:
+        """
+        Scan npm dependencies from package.json
+        
+        Returns:
+            List[Dict]: List of npm dependencies
+        """
+        package_json_path = os.path.join(self.repo_path, "package.json")
+        with open(package_json_path, 'r') as f:
+            package_data = json.load(f)
+            
+        dependencies = []
+        
+        # Process regular dependencies
+        if "dependencies" in package_data:
+            for name, version_str in package_data["dependencies"].items():
+                version_str = version_str.replace('^', '').replace('~', '')
+                dependencies.append({
+                    "name": name,
+                    "current_version": version_str,
+                    "type": "production"
+                })
+                
+        # Process dev dependencies
+        if "devDependencies" in package_data:
+            for name, version_str in package_data["devDependencies"].items():
+                version_str = version_str.replace('^', '').replace('~', '')
+                dependencies.append({
+                    "name": name,
+                    "current_version": version_str,
+                    "type": "development"
+                })
+                
+        # Get latest versions and vulnerabilities
+        for dep in dependencies:
+            latest_version = self._get_npm_latest_version(dep["name"])
+            dep["latest_version"] = latest_version
+            
+            # Check if update is available
+            if latest_version != dep["current_version"]:
+                try:
+                    current_semver = semver.VersionInfo.parse(dep["current_version"])
+                    latest_semver = semver.VersionInfo.parse(latest_version)
+                    
+                    if latest_semver.major > current_semver.major:
+                        dep["update_type"] = "major"
+                    elif latest_semver.minor > current_semver.minor:
+                        dep["update_type"] = "minor"
+                    else:
+                        dep["update_type"] = "patch"
+                except:
+                    dep["update_type"] = "unknown"
+            else:
+                dep["update_type"] = "none"
+                
+            # Get vulnerability information
+            vulnerabilities = self._check_vulnerabilities(dep["name"], dep["current_version"])
+            dep["vulnerabilities"] = vulnerabilities
+            
+        return dependencies
+    
+    def _scan_pip_dependencies(self) -> List[Dict]:
+        """
+        Scan Python dependencies from requirements.txt
+        
+        Returns:
+            List[Dict]: List of Python dependencies
+        """
+        requirements_path = os.path.join(self.repo_path, "requirements.txt")
+        if not os.path.exists(requirements_path):
+            return []
+            
+        dependencies = []
+        
+        with open(requirements_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                    
+                # Parse package name and version
+                if '==' in line:
+                    name, current_version = line.split('==', 1)
+                    name = name.strip()
+                    current_version = current_version.strip()
+                    
+                    dependencies.append({
+                        "name": name,
+                        "current_version": current_version,
+                        "type": "production"
+                    })
+        
+        # Get latest versions and vulnerabilities
+        for dep in dependencies:
+            latest_version = self._get_pypi_latest_version(dep["name"])
+            dep["latest_version"] = latest_version
+            
+            # Check if update is available
+            if latest_version != dep["current_version"]:
+                try:
+                    current_ver = version.parse(dep["current_version"])
+                    latest_ver = version.parse(latest_version)
+                    
+                    if latest_ver.major > current_ver.major:
+                        dep["update_type"] = "major"
+                    elif latest_ver.minor > current_ver.minor:
+                        dep["update_type"] = "minor"
+                    else:
+                        dep["update_type"] = "patch"
+                except:
+                    dep["update_type"] = "unknown"
+            else:
+                dep["update_type"] = "none"
+                
+            # Get vulnerability information
+            vulnerabilities = self._check_vulnerabilities(dep["name"], dep["current_version"])
+            dep["vulnerabilities"] = vulnerabilities
+            
+        return dependencies
+    
+    def _scan_maven_dependencies(self) -> List[Dict]:
+        """
+        Scan Maven dependencies from pom.xml
+        
+        Returns:
+            List[Dict]: List of Maven dependencies
+        """
+        # This is a simplified implementation
+        # A real implementation would parse the XML properly
+        pom_path = os.path.join(self.repo_path, "pom.xml")
+        if not os.path.exists(pom_path):
+            return []
+            
+        dependencies = []
+        
+        with open(pom_path, 'r') as f:
+            content = f.read()
+            
+        # Very simple regex-based extraction
+        dep_pattern = r'<dependency>.*?<groupId>(.*?)</groupId>.*?<artifactId>(.*?)</artifactId>.*?<version>(.*?)</version>.*?</dependency>'
+        for match in re.finditer(dep_pattern, content, re.DOTALL):
+            group_id, artifact_id, current_version = match.groups()
+            name = f"{group_id}:{artifact_id}"
+            
+            dependencies.append({
+                "name": name,
+                "current_version": current_version,
+                "type": "production"
+            })
+        
+        # Get latest versions and vulnerabilities
+        for dep in dependencies:
+            latest_version = self._get_maven_latest_version(dep["name"])
+            dep["latest_version"] = latest_version
+            
+            # Check if update is available
+            if latest_version != dep["current_version"]:
+                try:
+                    current_ver = version.parse(dep["current_version"])
+                    latest_ver = version.parse(latest_version)
+                    
+                    if latest_ver.major > current_ver.major:
+                        dep["update_type"] = "major"
+                    elif latest_ver.minor > current_ver.minor:
+                        dep["update_type"] = "minor"
+                    else:
+                        dep["update_type"] = "patch"
+                except:
+                    dep["update_type"] = "unknown"
+            else:
+                dep["update_type"] = "none"
+                
+            # Get vulnerability information
+            vulnerabilities = self._check_vulnerabilities(dep["name"], dep["current_version"])
+            dep["vulnerabilities"] = vulnerabilities
+            
+        return dependencies
+    
+    def _scan_gradle_dependencies(self) -> List[Dict]:
+        """
+        Scan Gradle dependencies from build.gradle
+        
+        Returns:
+            List[Dict]: List of Gradle dependencies
+        """
+        # This is a simplified implementation
+        gradle_path = os.path.join(self.repo_path, "build.gradle")
+        if not os.path.exists(gradle_path):
+            gradle_path = os.path.join(self.repo_path, "build.gradle.kts")
+            if not os.path.exists(gradle_path):
+                return []
+                
+        dependencies = []
+        
+        with open(gradle_path, 'r') as f:
+            content = f.read()
+            
+        # Simple regex for Gradle dependencies
+        # This is a simplification and won't catch all formats
+        dep_pattern = r'implementation [\'"]([^:]+):([^:]+):([^\'"]+)[\'"]'
+        for match in re.finditer(dep_pattern, content):
+            group_id, artifact_id, current_version = match.groups()
+            name = f"{group_id}:{artifact_id}"
+            
+            dependencies.append({
+                "name": name,
+                "current_version": current_version,
+                "type": "production"
+            })
+        
+        # Get latest versions and vulnerabilities
+        for dep in dependencies:
+            latest_version = self._get_maven_latest_version(dep["name"])  # Maven Central is used for Gradle too
+            dep["latest_version"] = latest_version
+            
+            # Check if update is available
+            if latest_version != dep["current_version"]:
+                try:
+                    current_ver = version.parse(dep["current_version"])
+                    latest_ver = version.parse(latest_version)
+                    
+                    if latest_ver.major > current_ver.major:
+                        dep["update_type"] = "major"
+                    elif latest_ver.minor > current_ver.minor:
+                        dep["update_type"] = "minor"
+                    else:
+                        dep["update_type"] = "patch"
+                except:
+                    dep["update_type"] = "unknown"
+            else:
+                dep["update_type"] = "none"
+                
+            # Get vulnerability information
+            vulnerabilities = self._check_vulnerabilities(dep["name"], dep["current_version"])
+            dep["vulnerabilities"] = vulnerabilities
+            
+        return dependencies
+    
+    def _get_npm_latest_version(self, package_name: str) -> str:
+        """
+        Get the latest version of an npm package
+        
+        Args:
+            package_name: Name of the npm package
+            
+        Returns:
+            str: Latest version
+        """
+        try:
+            url = f"https://registry.npmjs.org/{package_name}"
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("dist-tags", {}).get("latest", "unknown")
+            return "unknown"
+        except Exception as e:
+            print(f"Error getting npm version: {e}")
+            return "unknown"
+    
+    def _get_pypi_latest_version(self, package_name: str) -> str:
+        """
+        Get the latest version of a PyPI package
+        
+        Args:
+            package_name: Name of the PyPI package
+            
+        Returns:
+            str: Latest version
+        """
+        try:
+            url = f"https://pypi.org/pypi/{package_name}/json"
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("info", {}).get("version", "unknown")
+            return "unknown"
+        except Exception as e:
+            print(f"Error getting PyPI version: {e}")
+            return "unknown"
+    
+    def _get_maven_latest_version(self, package_name: str) -> str:
+        """
+        Get the latest version of a Maven package
+        
+        Args:
+            package_name: Name of the Maven package (groupId:artifactId)
+            
+        Returns:
+            str: Latest version
+        """
+        try:
+            group_id, artifact_id = package_name.split(":")
+            group_path = group_id.replace(".", "/")
+            url = f"https://search.maven.org/solrsearch/select?q=g:{group_id}+AND+a:{artifact_id}&rows=1&wt=json"
+            
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                if data["response"]["numFound"] > 0:
+                    return data["response"]["docs"][0]["latestVersion"]
+            return "unknown"
+        except Exception as e:
+            print(f"Error getting Maven version: {e}")
+            return "unknown"
+    
+    def _check_vulnerabilities(self, package_name: str, version: str) -> List[Dict]:
+        """
+        Check for known vulnerabilities in a package
+        
+        Args:
+            package_name: Name of the package
+            version: Version of the package
+            
+        Returns:
+            List[Dict]: List of vulnerabilities
+        """
+        # This is a simplified implementation
+        # A real implementation would query NVD or other vulnerability databases
+        try:
+            # For npm packages, we can use the npm audit API
+            if os.path.exists(os.path.join(self.repo_path, "package.json")):
+                temp_dir = os.path.join(os.getcwd(), "temp_audit")
+                os.makedirs(temp_dir, exist_ok=True)
+                
+                with open(os.path.join(temp_dir, "package.json"), "w") as f:
+                    json.dump({
+                        "name": "temp-audit",
+                        "version": "1.0.0",
+                        "dependencies": {
+                            package_name: version
+                        }
+                    }, f)
+                
+                try:
+                    result = subprocess.run(
+                        ["npm", "audit", "--json"],
+                        cwd=temp_dir,
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    # Clean up
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    
+                    if result.returncode == 0:
+                        return []  # No vulnerabilities
+                        
+                    try:
+                        audit_data = json.loads(result.stdout)
+                        vulnerabilities = []
+                        
+                        if "vulnerabilities" in audit_data:
+                            for vuln_name, vuln_data in audit_data["vulnerabilities"].items():
+                                if vuln_name == package_name:
+                                    vulnerabilities.append({
+                                        "severity": vuln_data.get("severity", "unknown"),
+                                        "description": vuln_data.get("title", "No description available"),
+                                        "fixed_in": vuln_data.get("fixAvailable", {}).get("version", "unknown")
+                                    })
+                        
+                        return vulnerabilities
+                    except json.JSONDecodeError:
+                        return []
+                except:
+                    # Clean up in case of error
+                    import shutil
+                    shutil.rmtree(temp_dir)
+                    return []
+            
+            # For other package types, we would query vulnerability databases
+            # This is a placeholder for demonstration
+            return []
+            
+        except Exception as e:
+            print(f"Error checking vulnerabilities: {e}")
+            return []
+    
+    def get_upgrade_candidates(self, min_severity: str = "medium") -> List[Dict]:
+        """
+        Get a list of dependencies that are candidates for upgrade
+        
+        Args:
+            min_severity: Minimum vulnerability severity to consider (low, medium, high, critical)
+            
+        Returns:
+            List[Dict]: List of upgrade candidates with details
+        """
+        all_dependencies = self.scan_dependencies()
+        
+        # Filter dependencies that need upgrade
+        upgrade_candidates = []
+        
+        for dep in all_dependencies:
+            # Check if there's a newer version
+            if dep["latest_version"] != "unknown" and dep["latest_version"] != dep["current_version"]:
+                # Check if there are vulnerabilities
+                has_vulnerabilities = False
+                for vuln in dep.get("vulnerabilities", []):
+                    severity = vuln.get("severity", "").lower()
+                    if severity in ["critical", "high"] or (severity == "medium" and min_severity in ["medium", "low"]) or (severity == "low" and min_severity == "low"):
+                        has_vulnerabilities = True
+                        break
+                
+                upgrade_priority = "low"
+                if has_vulnerabilities:
+                    upgrade_priority = "high"
+                elif dep["update_type"] == "patch":
+                    upgrade_priority = "medium"
+                
+                upgrade_candidates.append({
+                    "name": dep["name"],
+                    "current_version": dep["current_version"],
+                    "latest_version": dep["latest_version"],
+                    "update_type": dep["update_type"],
+                    "vulnerabilities": dep.get("vulnerabilities", []),
+                    "priority": upgrade_priority
+                })
+        
+        # Sort by priority (high first)
+        upgrade_candidates.sort(key=lambda x: {"high": 0, "medium": 1, "low": 2}[x["priority"]])
+        
+        return upgrade_candidates
+```
+
+## 4. Code Impact Analysis Tool
+
+Let's create a tool to analyze code and predict the impact of dependency upgrades.
+
+```python
+# code_impact_analyzer.py
+import os
+import re
+import ast
+import json
+from typing import Dict, List, Optional, Set, Tuple
+import subprocess
+from git import Repo
+
+class CodeImpactAnalyzer:
+    def __init__(self, repo_path: str):
+        """
+        Initialize the code impact analyzer
+        
+        Args:
+            repo_path: Path to the repository
+        """
+        self.repo_path = repo_path
+        
+    def find_dependency_usage(self, dependency_name: str) -> List[Dict]:
+        """
+        Find where a dependency is used in the codebase
+        
+        Args:
+            dependency_name: Name of the dependency
+            
+        Returns:
+            List[Dict]: List of files and lines where the dependency is used
+        """
+        project_type = self._detect_project_type()
+        
+        if project_type == "npm":
+            return self._find_js_dependency_usage(dependency_name)
+        elif project_type == "pip":
+            return self._find_python_dependency_usage(dependency_name)
+        elif project_type in ["maven", "gradle"]:
+            return self._find_java_dependency_usage(dependency_name)
+        else:
+            return []
+    
+    def _detect_project_type(self) -> str:
+        """
+        Detect the type of project based on configuration files
+        
+        Returns:
+            str: Project type (npm, maven, pip, etc.)
+        """
+        if os.path.exists(os.path.join(self.repo_path, "package.json")):
+            return "npm"
+        elif os.path.exists(os.path.join(self.repo_path, "pom.xml")):
+            return "maven"
+        elif os.path.exists(os.path.join(self.repo_path, "requirements.txt")) or \
+             os.path.exists(os.path.join(self.repo_path, "setup.py")):
+            return "pip"
+        elif os.path.exists(os.path.join(self.repo_path, "build.gradle")) or \
+             os.path.exists(os.path.join(self.repo_path, "build.gradle.kts")):
+            return "gradle"
+        else:
+            return "unknown"
+    
+    def _find_js_dependency_usage(self, dependency_name: str) -> List[Dict]:
+        """
+        Find where a JavaScript/npm dependency is used in the codebase
+        
+        Args:
+            dependency_name: Name of the npm package
+            
+        Returns:
+            List[Dict]: List of files and lines where the dependency is used
+        """
+        usage_patterns = [
+            f"require\\(['\"]({dependency_name}|{dependency_name}/[^'\"]+)['\"]\\)",
+            f"from ['\"]({dependency_name}|{dependency_name}/[^'\"]+)['\"]",
+            f"import .+ from ['\"]({dependency_name}|{dependency_name}/[^'\"]+)['\"]"
+        ]
+        
+        results = []
+        
+        for root, _, files in os.walk(self.repo_path):
+            # Skip node_modules and other non-source directories
+            if "node_modules" in root or ".git" in root:
+                continue
+                
+            for file in files:
+                if file.endswith((".js", ".jsx", ".ts", ".tsx")):
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, self.repo_path)
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        try:
+                            content = f.read()
+                            
+                            for pattern in usage_patterns:
+                                for match in re.finditer(pattern, content):
+                                    # Get line number
+                                    line_num = content[:match.start()].count('\n') + 1
+                                    
+                                    # Extract context (the line of code)
+                                    lines = content.split('\n')
+                                    context = lines[line_num - 1] if line_num <= len(lines) else ""
+                                    
+                                    results.append({
+                                        "file": relative_path,
+                                        "line": line_num,
+                                        "context": context.strip(),
+                                        "import_path": match.group(1)
+                                    })
+                        except:
+                            # Skip files that can't be read
+                            pass
+        
+        return results
+    
+    def _find_python_dependency_usage(self, dependency_name: str) -> List[Dict]:
+        """
+        Find where a Python dependency is used in the codebase
+        
+        Args:
+            dependency_name: Name of the Python package
+            
+        Returns:
+            List[Dict]: List of files and lines where the dependency is used
+        """
+        # Normalize dependency name
+        normalized_name = dependency_name.lower().replace('-', '_')
+        
+        usage_patterns = [
+            f"import {normalized_name}",
+            f"from {normalized_name} import",
+            f"import {normalized_name} as"
+        ]
+        
+        results = []
+        
+        for root, _, files in os.walk(self.repo_path):
+            # Skip virtual environments and other non-source directories
+            if "venv" in root or ".git" in root or "__pycache__" in root:
+                continue
+                
+            for file in files:
+                if file.endswith(".py"):
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, self.repo_path)
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        try:
+                            content = f.read()
+                            
+                            for pattern in usage_patterns:
+                                for match in re.finditer(pattern, content):
+                                    # Get line number
+                                    line_num = content[:match.start()].count('\n') + 1
+                                    
+                                    # Extract context (the line of code)
+                                    lines = content.split('\n')
+                                    context = lines[line_num - 1] if line_num <= len(lines) else ""
+                                    
+                                    results.append({
+                                        "file": relative_path,
+                                        "line": line_num,
+                                        "context": context.strip(),
+                                        "import_path": pattern.replace(normalized_name, normalized_name)
+                                    })
+                                    
+                            # Also try to find usage of the package's functions/classes
+                            try:
+                                tree = ast.parse(content)
+                                for node in ast.walk(tree):
+                                    if isinstance(node, ast.Name) and node.id == normalized_name:
+                                        line_num = node.lineno
+                                        
+                                        # Extract context
+                                        lines = content.split('\n')
+                                        context = lines[line_num - 1] if line_num <= len(lines) else ""
+                                        
+                                        results.append({
+                                            "file": relative_path,
+                                            "line": line_num,
+                                            "context": context.strip(),
+                                            "usage_type": "direct_reference"
+                                        })
+                            except:
+                                # Skip AST parsing errors
+                                pass
+                        except:
+                            # Skip files that can't be read
+                            pass
+        
+        return results
+    
+    def _find_java_dependency_usage(self, dependency_name: str) -> List[Dict]:
+        """
+        Find where a Java dependency is used in the codebase
+        
+        Args:
+            dependency_name: Name of the Maven/Gradle package (groupId:artifactId)
+            
+        Returns:
+            List[Dict]: List of files and lines where the dependency is used
+        """
+        # Extract artifactId from the dependency name
+        try:
+            group_id, artifact_id = dependency_name.split(":")
+        except:
+            artifact_id = dependency_name
+            
+        # Convert artifact_id to potential package names
+        # This is a heuristic and might not work for all cases
+        package_name_candidates = []
+        
+        # Convert from kebab-case to different formats
+        if "-" in artifact_id:
+            # Original
+            package_name_candidates.append(artifact_id)
+            
+            # Camel case
+            parts = artifact_id.split("-")
+            camel_case = parts[0] + "".join(p.capitalize() for p in parts[1:])
+            package_name_candidates.append(camel_case)
+            
+            # Pascal case
+            pascal_case = "".join(p.capitalize() for p in parts)
+            package_name_candidates.append(pascal_case)
+        else:
+            package_name_candidates.append(artifact_id)
+        
+        results = []
+        
+        for root, _, files in os.walk(self.repo_path):
+            # Skip build directories and other non-source directories
+            if "build" in root or "target" in root or ".git" in root:
+                continue
+                
+            for file in files:
+                if file.endswith((".java", ".kt", ".scala")):
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, self.repo_path)
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        try:
+                            content = f.read()
+                            
+                            # Look for import statements
+                            import_pattern = r"import\s+([^;]+);"
+                            for match in re.finditer(import_pattern, content):
+                                import_stmt = match.group(1).strip()
+                                
+                                # Check if any candidate is in the import statement
+                                for candidate in package_name_candidates:
+                                    if candidate.lower() in import_stmt.lower():
+                                        # Get line number
+                                        line_num = content[:match.start()].count('\n') + 1
+                                        
+                                        # Extract context (the line of code)
+                                        lines = content.split('\n')
+                                        context = lines[line_num - 1] if line_num <= len(lines) else ""
+                                        
+                                        results.append({
+                                            "file": relative_path,
+                                            "line": line_num,
+                                            "context": context.strip(),
+                                            "import_path": import_stmt
+                                        })
+                                        break
+                        except:
+                            # Skip files that can't be read
+                            pass
+        
+        return results
+    
+    def extract_api_usage_examples(self, dependency_name: str, max_examples: int = 10) -> List[str]:
+        """
+        Extract code examples showing how the dependency's API is used
+        
+        Args:
+            dependency_name: Name of the dependency
+            max_examples: Maximum number of examples to extract
+            
+        Returns:
+            List[str]: Code examples showing API usage
+        """
+        usage_locations = self.find_dependency_usage(dependency_name)
+        
+        if not usage_locations:
+            return []
+            
+        examples = []
+        processed_files = set()
+        
+        for usage in usage_locations:
+            file_path = os.path.join(self.repo_path, usage["file"])
+            
+            # Skip if we already processed this file
+            if file_path in processed_files:
+                continue
+                
+            processed_files.add(file_path)
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    
+                    # Extract a code snippet around the usage
+                    lines = content.split('\n')
+                    line_index = usage["line"] - 1
+                    
+                    # Get a window of lines around the usage
+                    start = max(0, line_index - 5)
+                    end = min(len(lines), line_index + 15)
+                    
+                    snippet = "\n".join(lines[start:end])
+                    examples.append(f"File: {usage['file']}\n```\n{snippet}\n```")
+                    
+                    if len(examples) >= max_examples:
+                        break
+            except:
+                continue
+        
+        return examples
+    
+    def analyze_breaking_changes(self, 
+                               dependency_name: str, 
+                               current_version: str, 
+                               target_version: str) -> Dict:
+        """
+        Analyze potential breaking changes when upgrading a dependency
+        
+        Args:
+            dependency_name: Name of the dependency
+            current_version: Current version
+            target_version: Target version for upgrade
+            
+        Returns:
+            Dict: Analysis of potential breaking changes
+        """
+        # This would ideally query package documentation, release notes, etc.
+        # For this example, we'll use a simplified approach
+        
+        project_type = self._detect_project_type()
+        
+        # Get usage examples
+        usage_examples = self.extract_api_usage_examples(dependency_name)
+        
+        # Get repository history to see if this dependency was upgraded before
+        repo_history = self._get_dependency_upgrade_history(dependency_name)
+        
+        # For npm packages, we can use the npm view command to get information
+        if project_type == "npm":
+            try:
+                result = subprocess.run(
+                    ["npm", "view", dependency_name, "versions", "--json"],
+                    capture_output=True,
+                    text=True
+                )
+                
+                if result.returncode == 0:
+                    versions = json.loads(result.stdout)
+                    
+                    # Find versions between current and target
+                    try:
+                        from packaging import version
+                        current_ver = version.parse(current_version)
+                        target_ver = version.parse(target_version)
+                        
+                        intermediate_versions = [
+                            v for v in versions
+                            if current_ver < version.parse(v) <= target_ver
+                        ]
+                    except:
+                        intermediate_versions = []
+                        
+                    return {
+                        "dependency": dependency_name,
+                        "current_version": current_version,
+                        "target_version": target_version,
+                        "usage_examples": usage_examples,
+                        "previous_upgrades": repo_history,
+                        "intermediate_versions": intermediate_versions,
+                        "risk_assessment": self._assess_upgrade_risk(dependency_name, current_version, target_version)
+                    }
+            except Exception as e:
+                print(f"Error analyzing npm breaking changes: {e}")
+        
+        # Generic analysis for other package types
+        return {
+            "dependency": dependency_name,
+            "current_version": current_version,
+            "target_version": target_version,
+            "usage_examples": usage_examples,
+            "previous_upgrades": repo_history,
+            "risk_assessment": self._assess_upgrade_risk(dependency_name, current_version, target_version)
+        }
+    
+    def _get_dependency_upgrade_history(self, dependency_name: str) -> List[Dict]:
+        """
+        Get history of previous upgrades for a dependency
+        
+        Args:
+            dependency_name: Name of the dependency
+            
+        Returns:
+            List[Dict]: History of previous upgrades
+        """
+        try:
+            repo = Repo(self.repo_path)
+            
+            # This is a simplified approach - in a real implementation,
+            # we would search commit messages and diff content more thoroughly
+            history = []
+            
+            # Look for package.json changes for npm
+            if os.path.exists(os.path.join(self.repo_path, "package.json")):
+                for commit in repo.iter_commits(paths="package.json"):
+                    if dependency_name.lower() in commit.message.lower():
+                        history.append({
+                            "commit": commit.hexsha,
+                            "date": commit.committed_datetime.isoformat(),
+                            "message": commit.message
+                        })
+            
+            # Look for requirements.txt changes for Python
+            elif os.path.exists(os.path.join(self.repo_path, "requirements.txt")):
+                for commit in repo.iter_commits(paths="requirements.txt"):
+                    if dependency_name.lower() in commit.message.lower():
+                        history.append({
+                            "commit": commit.hexsha,
+                            "date": commit.committed_datetime.isoformat(),
+                            "message": commit.message
+                        })
+            
+            # Look for pom.xml changes for Maven
+            elif os.path.exists(os.path.join(self.repo_path, "pom.xml")):
+                for commit in repo.iter_commits(paths="pom.xml"):
+                    if dependency_name.lower() in commit.message.lower():
+                        history.append({
+                            "commit": commit.hexsha,
+                            "date": commit.committed_datetime.isoformat(),
+                            "message": commit.message
+                        })
+            
+            return history[:5]  # Return the 5 most recent upgrades
+            
+        except Exception as e:
+            print(f"Error getting dependency upgrade history: {e}")
+            return []
+    
+    def _assess_upgrade_risk(self, dependency_name: str, current_version: str, target_version: str) -> str:
+        """
+        Assess the risk level of a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            current_version: Current version
+            target_version: Target version for upgrade
+            
+        Returns:
+            str: Risk level (low, medium, high)
+        """
+        try:
+            from packaging import version
+            
+            current_ver = version.parse(current_version)
+            target_ver = version.parse(target_version)
+            
+            # Major version bump is high risk
+            if target_ver.major > current_ver.major:
+                return "high"
+            
+            # Minor version bump is medium risk
+            elif target_ver.minor > current_ver.minor:
+                return "medium"
+            
+            # Patch version bump is low risk
+            else:
+                return "low"
+                
+        except Exception as e:
+            print(f"Error assessing upgrade risk: {e}")
+            
+            # Default to medium if we can't parse versions
+            return "medium"
+    
+    def get_affected_files(self, dependency_name: str) -> List[str]:
+        """
+        Get a list of files that might be affected by upgrading a dependency
+        
+        Args:
+            dependency_name: Name of the dependency
+            
+        Returns:
+            List[str]: List of potentially affected files
+        """
+        usage_locations = self.find_dependency_usage(dependency_name)
+        return list(set(usage["file"] for usage in usage_locations))
+```
+
+## 5. Test Generation and Validation Tool
+
+Let's create a tool to generate and run tests for validating dependency upgrades.
+
+```python
+# test_generator.py
+import os
+import re
+import json
+import subprocess
+from typing import Dict, List, Optional, Tuple
+import pytest
+
+class TestGenerator:
+    def __init__(self, repo_path: str):
+        """
+        Initialize the test generator
+        
+        Args:
+            repo_path: Path to the repository
+        """
+        self.repo_path = repo_path
+        
+    def detect_test_framework(self) -> str:
+        """
+        Detect the testing framework used in the project
+        
+        Returns:
+            str: Test framework (jest, pytest, junit, etc.)
+        """
+        # Check for Jest (JavaScript/TypeScript)
+        package_json_path = os.path.join(self.repo_path, "package.json")
+        if os.path.exists(package_json_path):
+            with open(package_json_path, 'r') as f:
+                try:
+                    data = json.load(f)
+                    
+                    # Check dependencies and devDependencies
+                    deps = data.get("dependencies", {})
+                    dev_deps = data.get("devDependencies", {})
+                    
+                    if "jest" in dev_deps or "jest" in deps:
+                        return "jest"
+                    elif "mocha" in dev_deps or "mocha" in deps:
+                        return "mocha"
+                except:
+                    pass
+        
+        # Check for pytest (Python)
+        requirements_path = os.path.join(self.repo_path, "requirements.txt")
+        if os.path.exists(requirements_path):
+            with open(requirements_path, 'r') as f:
+                content = f.read()
+                if "pytest" in content:
+                    return "pytest"
+        
+        # Check for JUnit (Java)
+        pom_path = os.path.join(self.repo_path, "pom.xml")
+        if os.path.exists(pom_path):
+            with open(pom_path, 'r') as f:
+                content = f.read()
+                if "junit" in content.lower():
+                    return "junit"
+        
+        # Default to generic
+        return "generic"
+    
+    def find_existing_tests(self, dependency_name: str) -> List[Dict]:
+        """
+        Find existing tests that might be related to a dependency
+        
+        Args:
+            dependency_name: Name of the dependency
+            
+        Returns:
+            List[Dict]: List of existing tests
+        """
+        test_framework = self.detect_test_framework()
+        
+        # Normalize dependency name
+        normalized_name = dependency_name.lower().replace('-', '_')
+        
+        results = []
+        
+        # Define test directories based on common conventions
+        test_dirs = ["test", "tests", "src/test", "__tests__", "spec"]
+        
+        for test_dir in test_dirs:
+            test_path = os.path.join(self.repo_path, test_dir)
+            
+            if not os.path.exists(test_path) or not os.path.isdir(test_path):
+                continue
+                
+            for root, _, files in os.walk(test_path):
+                for file in files:
+                    # Skip non-test files
+                    if not self._is_test_file(file, test_framework):
+                        continue
+                        
+                    file_path = os.path.join(root, file)
+                    relative_path = os.path.relpath(file_path, self.repo_path)
+                    
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        try:
+                            content = f.read()
+                            
+                            # Check if the file contains references to the dependency
+                            if normalized_name in content.lower():
+                                # Extract test cases
+                                test_cases = self._extract_test_cases(content, test_framework)
+                                
+                                if test_cases:
+                                    results.append({
+                                        "file": relative_path,
+                                        "test_cases": test_cases
+                                    })
+                        except:
+                            # Skip files that can't be read
+                            pass
+        
+        return results
+    
+    def _is_test_file(self, filename: str, framework: str) -> bool:
+        """
+        Check if a file is a test file based on naming conventions
+        
+        Args:
+            filename: Name of the file
+            framework: Test framework
+            
+        Returns:
+            bool: True if the file is a test file
+        """
+        if framework == "jest":
+            return filename.endswith((".test.js", ".test.ts", ".spec.js", ".spec.ts"))
+        elif framework == "mocha":
+            return filename.endswith((".test.js", ".spec.js"))
+        elif framework == "pytest":
+            return filename.startswith("test_") and filename.endswith(".py")
+        elif framework == "junit":
+            return filename.endswith("Test.java")
+        else:
+            # Generic test file detection
+            return "test" in filename.lower() or "spec" in filename.lower()
+    
+    def _extract_test_cases(self, content: str, framework: str) -> List[Dict]:
+        """
+        Extract test cases from a file
+        
+        Args:
+            content: Content of the file
+            framework: Test framework
+            
+        Returns:
+            List[Dict]: List of test cases
+        """
+        test_cases = []
+        
+        if framework == "jest" or framework == "mocha":
+            # Extract Jest/Mocha test cases
+            # Look for patterns like describe('...', () => { ... }) and it('...', () => { ... })
+            describe_pattern = r"describe\(['\"]([^'\"]+)['\"]"
+            it_pattern = r"it\(['\"]([^'\"]+)['\"]"
+            
+            # Find describe blocks
+            for match in re.finditer(describe_pattern, content):
+                describe_name = match.group(1)
+                
+                # Find it blocks (individual tests)
+                for it_match in re.finditer(it_pattern, content):
+                    test_name = it_match.group(1)
+                    
+                    test_cases.append({
+                        "name": f"{describe_name} - {test_name}",
+                        "type": "unit"
+                    })
+                    
+        elif framework == "pytest":
+            # Extract pytest test cases
+            # Look for functions starting with test_
+            test_pattern = r"def\s+(test_[a-zA-Z0-9_]+)\s*\("
+            
+            for match in re.finditer(test_pattern, content):
+                test_name = match.group(1)
+                
+                test_cases.append({
+                    "name": test_name,
+                    "type": "unit"
+                })
+                
+        elif framework == "junit":
+            # Extract JUnit test cases
+            # Look for methods annotated with @Test
+            test_pattern = r"@Test\s+[public\s]+void\s+([a-zA-Z0-9_]+)\s*\("
+            
+            for match in re.finditer(test_pattern, content):
+                test_name = match.group(1)
+                
+                test_cases.append({
+                    "name": test_name,
+                    "type": "unit"
+                })
+        
+        return test_cases
+    
+    def generate_test_cases(self, 
+                          dependency_name: str, 
+                          api_usage: List[Dict],
+                          breaking_changes: List[Dict]) -> Dict:
+        """
+        Generate test cases for a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            api_usage: List of API usage examples
+            breaking_changes: List of breaking changes
+            
+        Returns:
+            Dict: Generated test cases
+        """
+        test_framework = self.detect_test_framework()
+        
+        # Find existing tests
+        existing_tests = self.find_existing_tests(dependency_name)
+        
+        # Generate new tests based on API usage and breaking changes
+        generated_tests = []
+        
+        if test_framework == "jest":
+            generated_tests = self._generate_jest_tests(dependency_name, api_usage, breaking_changes)
+        elif test_framework == "pytest":
+            generated_tests = self._generate_pytest_tests(dependency_name, api_usage, breaking_changes)
+        elif test_framework == "junit":
+            generated_tests = self._generate_junit_tests(dependency_name, api_usage, breaking_changes)
+        else:
+            # Generic test generation
+            generated_tests = self._generate_generic_tests(dependency_name, api_usage, breaking_changes)
+        
+        return {
+            "existing_tests": existing_tests,
+            "generated_tests": generated_tests,
+            "framework": test_framework
+        }
+    
+    def _generate_jest_tests(self, 
+                           dependency_name: str, 
+                           api_usage: List[Dict],
+                           breaking_changes: List[Dict]) -> List[Dict]:
+        """
+        Generate Jest tests for a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            api_usage: List of API usage examples
+            breaking_changes: List of breaking changes
+            
+        Returns:
+            List[Dict]: Generated Jest tests
+        """
+        tests = []
+        
+        # Normalize dependency name for use in variable names
+        normalized_name = dependency_name.replace('-', '').replace('@', '').replace('/', '')
+        
+        # Create a basic test file
+        test_content = f"""
+import {normalized_name} from '{dependency_name}';
+
+describe('{dependency_name} upgrade validation', () => {{
+    test('should import the dependency correctly', () => {{
+        expect({normalized_name}).toBeDefined();
+    }});
+        """
+        
+        # Add tests for each API usage
+        for i, usage in enumerate(api_usage):
+            # Extract the function or method being used
+            context = usage.get("context", "")
+            
+            # Simple heuristic to extract function names
+            function_match = re.search(r'\.([a-zA-Z0-9_]+)\(', context)
+            
+            if function_match:
+                function_name = function_match.group(1)
+                
+                test_content += f"""
+    test('{function_name} function should be available', () => {{
+        expect({normalized_name}.{function_name}).toBeDefined();
+        // Add more specific assertions based on expected behavior
+    }});
+                """
+                
+                tests.append({
+                    "name": f"validate_{function_name}_availability",
+                    "content": test_content,
+                    "file": f"{normalized_name}.test.js"
+                })
+        
+        # Add tests for breaking changes
+        for i, change in enumerate(breaking_changes):
+            change_description = change.get("description", "")
+            
+            test_content += f"""
+    test('should handle breaking change: {change_description}', () => {{
+        // Add assertions to verify the breaking change is handled correctly
+    }});
+            """
+        
+        test_content += "\n});"
+        
+        tests.append({
+            "name": f"validate_{normalized_name}_upgrade",
+            "content": test_content,
+            "file": f"{normalized_name}.test.js"
+        })
+        
+        return tests
+    
+    def _generate_pytest_tests(self, 
+                             dependency_name: str, 
+                             api_usage: List[Dict],
+                             breaking_changes: List[Dict]) -> List[Dict]:
+        """
+        Generate pytest tests for a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            api_usage: List of API usage examples
+            breaking_changes: List of breaking changes
+            
+        Returns:
+            List[Dict]: Generated pytest tests
+        """
+        tests = []
+        
+        # Normalize dependency name for use in variable names
+        normalized_name = dependency_name.replace('-', '_').replace('.', '_').lower()
+        
+        # Create a basic test file
+        test_content = f"""
+import pytest
+import {normalized_name}
+
+def test_{normalized_name}_import():
+    \"\"\"Test that the dependency can be imported correctly.\"\"\"
+    assert {normalized_name} is not None
+        """
+        
+        # Add tests for each API usage
+        for i, usage in enumerate(api_usage):
+            # Extract the function or method being used
+            context = usage.get("context", "")
+            
+            # Simple heuristic to extract function names
+            function_match = re.search(r'\.([a-zA-Z0-9_]+)\(', context)
+            
+            if function_match:
+                function_name = function_match.group(1)
+                
+                test_content += f"""
+
+def test_{normalized_name}_{function_name}_availability():
+    \"\"\"Test that the {function_name} function is available.\"\"\"
+    assert hasattr({normalized_name}, '{function_name}')
+    # Add more specific assertions based on expected behavior
+                """
+                
+                tests.append({
+                    "name": f"test_{normalized_name}_{function_name}_availability",
+                    "content": test_content,
+                    "file": f"test_{normalized_name}.py"
+                })
+        
+        # Add tests for breaking changes
+        for i, change in enumerate(breaking_changes):
+            change_description = change.get("description", "")
+            
+            test_content += f"""
+
+def test_{normalized_name}_breaking_change_{i}():
+    \"\"\"Test that breaking change is handled: {change_description}\"\"\"
+    # Add assertions to verify the breaking change is handled correctly
+    pass
+            """
+        
+        tests.append({
+            "name": f"test_{normalized_name}_upgrade",
+            "content": test_content,
+            "file": f"test_{normalized_name}.py"
+        })
+        
+        return tests
+    
+    def _generate_junit_tests(self, 
+                            dependency_name: str, 
+                            api_usage: List[Dict],
+                            breaking_changes: List[Dict]) -> List[Dict]:
+        """
+        Generate JUnit tests for a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            api_usage: List of API usage examples
+            breaking_changes: List of breaking changes
+            
+        Returns:
+            List[Dict]: Generated JUnit tests
+        """
+        tests = []
+        
+        # Convert dependency name to Java class name
+        class_name = "".join(word.capitalize() for word in re.findall(r'[a-zA-Z0-9]+', dependency_name))
+        
+        # Create a basic test file
+        test_content = f"""
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+public class {class_name}UpgradeTest {{
+    
+    @Test
+    public void testDependencyAvailability() {{
+        // Test that the dependency can be used
+        // Add assertions based on expected behavior
+    }}
+        """
+        
+        # Add tests for each API usage
+        for i, usage in enumerate(api_usage):
+            # Extract the function or method being used
+            context = usage.get("context", "")
+            
+            # Simple heuristic to extract method names
+            method_match = re.search(r'\.([a-zA-Z0-9_]+)\(', context)
+            
+            if method_match:
+                method_name = method_match.group(1)
+                
+                test_content += f"""
+    
+    @Test
+    public void test{method_name.capitalize()}Method() {{
+        // Test that the {method_name} method works correctly
+        // Add assertions based on expected behavior
+    }}
+                """
+                
+                tests.append({
+                    "name": f"test{method_name.capitalize()}Method",
+                    "content": test_content,
+                    "file": f"{class_name}UpgradeTest.java"
+                })
+        
+        # Add tests for breaking changes
+        for i, change in enumerate(breaking_changes):
+            change_description = change.get("description", "")
+            
+            test_content += f"""
+    
+    @Test
+    public void testBreakingChange{i}() {{
+        // Test that breaking change is handled: {change_description}
+        // Add assertions to verify the breaking change is handled correctly
+    }}
+            """
+        
+        test_content += "\n}"
+        
+        tests.append({
+            "name": f"test{class_name}Upgrade",
+            "content": test_content,
+            "file": f"{class_name}UpgradeTest.java"
+        })
+        
+        return tests
+    
+    def _generate_generic_tests(self, 
+                              dependency_name: str, 
+                              api_usage: List[Dict],
+                              breaking_changes: List[Dict]) -> List[Dict]:
+        """
+        Generate generic tests for a dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            api_usage: List of API usage examples
+            breaking_changes: List of breaking changes
+            
+        Returns:
+            List[Dict]: Generated generic tests
+        """
+        # Default to pytest format for generic tests
+        return self._generate_pytest_tests(dependency_name, api_usage, breaking_changes)
+    
+    def write_test_files(self, generated_tests: List[Dict]) -> List[str]:
+        """
+        Write generated test files to disk
+        
+        Args:
+            generated_tests: List of generated tests
+            
+        Returns:
+            List[str]: List of written test file paths
+        """
+        test_framework = self.detect_test_framework()
+        
+        # Determine the test directory
+        test_dir = None
+        
+        if test_framework == "jest":
+            test_dirs = ["__tests__", "test", "tests"]
+        elif test_framework == "pytest":
+            test_dirs = ["tests", "test"]
+        elif test_framework == "junit":
+            test_dirs = ["src/test/java", "test"]
+        else:
+            test_dirs = ["tests", "test"]
+            
+        # Find the first existing test directory
+        for dir_name in test_dirs:
+            dir_path = os.path.join(self.repo_path, dir_name)
+            if os.path.exists(dir_path) and os.path.isdir(dir_path):
+                test_dir = dir_path
+                break
+                
+        # If no test directory exists, create one
+        if test_dir is None:
+            test_dir = os.path.join(self.repo_path, test_dirs[0])
+            os.makedirs(test_dir, exist_ok=True)
+            
+        # Write test files
+        written_files = []
+        
+        for test in generated_tests:
+            file_path = os.path.join(test_dir, test["file"])
+            
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            
+            with open(file_path, 'w') as f:
+                f.write(test["content"])
+                
+            written_files.append(file_path)
+            
+        return written_files
+    
+    def run_tests(self, test_files: List[str] = None) -> Dict:
+        """
+        Run tests to validate the dependency upgrade
+        
+        Args:
+            test_files: List of test files to run (if None, run all tests)
+            
+        Returns:
+            Dict: Test results
+        """
+        test_framework = self.detect_test_framework()
+        
+        try:
+            if test_framework == "jest":
+                return self._run_jest_tests(test_files)
+            elif test_framework == "pytest":
+                return self._run_pytest_tests(test_files)
+            elif test_framework == "junit":
+                return self._run_junit_tests(test_files)
+            else:
+                # Default to generic test runner
+                return self._run_generic_tests(test_files)
+        except Exception as e:
+            return {
+                "success": False,
+                "framework": test_framework,
+                "error": str(e),
+                "results": []
+            }
+    
+    def _run_jest_tests(self, test_files: List[str] = None) -> Dict:
+        """
+        Run Jest tests
+        
+        Args:
+            test_files: List of test files to run
+            
+        Returns:
+            Dict: Test results
+        """
+        command = ["npm", "test"]
+        
+        if test_files:
+            # Jest can run specific test files
+            command.extend(test_files)
+            
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True
+            )
+            
+            return {
+                "success": result.returncode == 0,
+                "framework": "jest",
+                "output": result.stdout,
+                "error": result.stderr if result.returncode != 0 else None
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "framework": "jest",
+                "error": str(e)
+            }
+    
+    def _run_pytest_tests(self, test_files: List[str] = None) -> Dict:
+        """
+        Run pytest tests
+        
+        Args:
+            test_files: List of test files to run
+            
+        Returns:
+            Dict: Test results
+        """
+        command = ["pytest", "-v"]
+        
+        if test_files:
+            command.extend(test_files)
+            
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True
+            )
+            
+            return {
+                "success": result.returncode == 0,
+                "framework": "pytest",
+                "output": result.stdout,
+                "error": result.stderr if result.returncode != 0 else None
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "framework": "pytest",
+                "error": str(e)
+            }
+    
+    def _run_junit_tests(self, test_files: List[str] = None) -> Dict:
+        """
+        Run JUnit tests
+        
+        Args:
+            test_files: List of test files to run
+            
+        Returns:
+            Dict: Test results
+        """
+        # For Maven projects
+        if os.path.exists(os.path.join(self.repo_path, "pom.xml")):
+            command = ["mvn", "test"]
+            
+            if test_files:
+                # Maven can run specific test classes
+                test_classes = []
+                for file_path in test_files:
+                    # Extract class name from file path
+                    file_name = os.path.basename(file_path)
+                    if file_name.endswith(".java"):
+                        class_name = file_name[:-5]  # Remove .java extension
+                        test_classes.append(class_name)
+                
+                if test_classes:
+                    test_pattern = ",".join(test_classes)
+                    command.extend(["-Dtest=" + test_pattern])
+        else:
+            # For Gradle projects
+            command = ["./gradlew", "test"]
+            
+            if test_files:
+                # Gradle can run specific test classes
+                test_classes = []
+                for file_path in test_files:
+                    # Extract class name from file path
+                    file_name = os.path.basename(file_path)
+                    if file_name.endswith(".java"):
+                        class_name = file_name[:-5]  # Remove .java extension
+                        test_classes.append(class_name)
+                
+                if test_classes:
+                    test_pattern = ",".join(test_classes)
+                    command.extend(["--tests", test_pattern])
+            
+        try:
+            result = subprocess.run(
+                command,
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True
+            )
+            
+            return {
+                "success": result.returncode == 0,
+                "framework": "junit",
+                "output": result.stdout,
+                "error": result.stderr if result.returncode != 0 else None
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "framework": "junit",
+                "error": str(e)
+            }
+    
+    def _run_generic_tests(self, test_files: List[str] = None) -> Dict:
+        """
+        Run generic tests
+        
+        Args:
+            test_files: List of test files to run
+            
+        Returns:
+            Dict: Test results
+        """
+        # Default to pytest for generic tests
+        return self._run_pytest_tests(test_files)
+```
+
+## 6. Pull Request Creation Tool
+
+Let's create a tool to automate the creation of pull requests for dependency upgrades.
+
+```python
+# pr_creator.py
+import os
+import re
+import json
+import subprocess
+from typing import Dict, List, Optional
+from git import Repo
+import requests
+
+class PRCreator:
+    def __init__(self, repo_path: str):
+        """
+        Initialize the PR creator
+        
+        Args:
+            repo_path: Path to the repository
+        """
+        self.repo_path = repo_path
+        self.github_token = os.getenv("GITHUB_TOKEN")
+        
+    def update_dependency(self, 
+                        dependency_name: str, 
+                        current_version: str, 
+                        target_version: str) -> bool:
+        """
+        Update a dependency in the project configuration
+        
+        Args:
+            dependency_name: Name of the dependency
+            current_version: Current version
+            target_version: Target version
+            
+        Returns:
+            bool: True if the update was successful
+        """
+        project_type = self._detect_project_type()
+        
+        if project_type == "npm":
+            return self._update_npm_dependency(dependency_name, target_version)
+        elif project_type == "pip":
+            return self._update_pip_dependency(dependency_name, target_version)
+        elif project_type == "maven":
+            return self._update_maven_dependency(dependency_name, target_version)
+        elif project_type == "gradle":
+            return self._update_gradle_dependency(dependency_name, target_version)
+        else:
+            return False
+    
+    def _detect_project_type(self) -> str:
+        """
+        Detect the type of project based on configuration files
+        
+        Returns:
+            str: Project type (npm, maven, pip, etc.)
+        """
+        if os.path.exists(os.path.join(self.repo_path, "package.json")):
+            return "npm"
+        elif os.path.exists(os.path.join(self.repo_path, "pom.xml")):
+            return "maven"
+        elif os.path.exists(os.path.join(self.repo_path, "requirements.txt")) or \
+             os.path.exists(os.path.join(self.repo_path, "setup.py")):
+            return "pip"
+        elif os.path.exists(os.path.join(self.repo_path, "build.gradle")) or \
+             os.path.exists(os.path.join(self.repo_path, "build.gradle.kts")):
+            return "gradle"
+        else:
+            return "unknown"
+    
+    def _update_npm_dependency(self, dependency_name: str, target_version: str) -> bool:
+        """
+        Update an npm dependency
+        
+        Args:
+            dependency_name: Name of the npm package
+            target_version: Target version
+            
+        Returns:
+            bool: True if the update was successful
+        """
+        try:
+            # Use npm to update the dependency
+            result = subprocess.run(
+                ["npm", "install", f"{dependency_name}@{target_version}"],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True
+            )
+            
+            return result.returncode == 0
+        except Exception as e:
+            print(f"Error updating npm dependency: {e}")
+            return False
+    
+    def _update_pip_dependency(self, dependency_name: str, target_version: str) -> bool:
+        """
+        Update a Python dependency in requirements.txt
+        
+        Args:
+            dependency_name: Name of the Python package
+            target_version: Target version
+            
+        Returns:
+            bool: True if the update was successful
+        """
+        requirements_path = os.path.join(self.repo_path, "requirements.txt")
+        
+        if not os.path.exists(requirements_path):
+            return False
+            
+        try:
+            with open(requirements_path, 'r') as f:
+                lines = f.readlines()
+                
+            updated_lines = []
+            found = False
+            
+            for line in lines:
+                if line.strip().startswith(f"{dependency_name}=="):
+                    updated_lines.append(f"{dependency_name}=={target_version}\n")
+                    found = True
+                else:
+                    updated_lines.append(line)
+            
+            if not found:
+                updated_lines.append(f"{dependency_name}=={target_version}\n")
+                
+            with open(requirements_path, 'w') as f:
+                f.writelines(updated_lines)
+                
+            return True
+        except Exception as e:
+            print(f"Error updating pip dependency: {e}")
+            return False
+    
+    def _update_maven_dependency(self, dependency_name: str, target_version: str) -> bool:
+        """
+        Update a Maven dependency in pom.xml
+        
+        Args:
+            dependency_name: Name of the Maven package (groupId:artifactId)
+            target_version: Target version
+            
+        Returns:
+            bool: True if the update was successful
+        """
+        pom_path = os.path.join(self.repo_path, "pom.xml")
+        
+        if not os.path.exists(pom_path):
+            return False
+            
+        try:
+            # Parse groupId and artifactId
+            group_id, artifact_id = dependency_name.split(":")
+            
+            with open(pom_path, 'r') as f:
+                content = f.read()
+                
+            # Find and replace the version in the dependency section
+            pattern = f"<dependency>\\s*<groupId>{group_id}</groupId>\\s*<artifactId>{artifact_id}</artifactId>\\s*<version>[^<]+</version>"
+            replacement = f"<dependency>\n        <groupId>{group_id}</groupId>\n        <artifactId>{artifact_id}</artifactId>\n        <version>{target_version}</version>"
+            
+            updated_content = re.sub(pattern, replacement, content)
+            
+            with open(pom_path, 'w') as f:
+                f.write(updated_content)
+                
+            return True
+        except Exception as e:
+            print(f"Error updating Maven dependency: {e}")
+            return False
+    
+    def _update_gradle_dependency(self, dependency_name: str, target_version: str) -> bool:
+        """
+        Update a Gradle dependency in build.gradle
+        
+        Args:
+            dependency_name: Name of the Gradle package (groupId:artifactId)
+            target_version: Target version
+            
+        Returns:
+            bool: True if the update was successful
+        """
+        gradle_path = os.path.join(self.repo_path, "build.gradle")
+        
+        if not os.path.exists(gradle_path):
+            gradle_path = os.path.join(self.repo_path, "build.gradle.kts")
+            if not os.path.exists(gradle_path):
+                return False
+                
+        try:
+            # Parse groupId and artifactId
+            group_id, artifact_id = dependency_name.split(":")
+            
+            with open(gradle_path, 'r') as f:
+                content = f.read()
+                
+            # Find and replace the version in the dependency section
+            pattern = f"implementation ['\"]({group_id}:{artifact_id}:)[^'\"]+['\"]"
+            replacement = f"implementation '$1{target_version}'"
+            
+            updated_content = re.sub(pattern, replacement, content)
+            
+            with open(gradle_path, 'w') as f:
+                f.write(updated_content)
+                
+            return True
+        except Exception as e:
+            print(f"Error updating Gradle dependency: {e}")
+            return False
+    
+    def create_branch(self, dependency_name: str, target_version: str) -> str:
+        """
+        Create a new branch for the dependency upgrade
+        
+        Args:
+            dependency_name: Name of the dependency
+            target_version: Target version
+            
+        Returns:
+            str: Name of the created branch
+        """
+        try:
+            repo = Repo(self.repo_path)
+            
+            # Create a branch name
+            normalized_name = dependency_name.replace('@', '').replace('/', '-').replace(':', '-')
+            branch_name = f"upgrade-{normalized_name}-to-{target_version}"
+            
+            # Check if the branch already exists
+            if branch_name in repo.heads:
+                # If it exists, check it out
+                repo.git.checkout(branch_name)
+            else:
+                # Create and check out the new branch
+                repo.git.checkout('HEAD', b=branch_name)
+                
+            return branch_name
+        except Exception as e:
+            print(f"Error creating branch: {e}")
+            return ""
+    
+    def commit_changes(self, dependency_name: str, current_version: str, target_version: str) -> bool:
+        """
+        Commit the dependency upgrade changes
+        
+        Args:
+            dependency_name: Name of the dependency
+            current_version: Current version
+            target_version: Target version
+            
+        Returns:
+            bool: True if the commit was successful
+        """
+        try:
+            repo = Repo(self.repo_path)
+            
+            # Check if there are changes to commit
+            if not repo.is_dirty():
+                print("No changes to commit")
+                return False
+                
+            # Add all changes
+            repo.git.add(A=True)
+            
+            # Create commit message
+            commit_message = f"Upgrade {dependency_name} from {current_version} to {target_version}"
+            
+            # Commit the changes
+            repo.git.commit(m=commit_message)
+            
+            return True
+        except Exception as e:
+            print(f"Error committing changes: {e}")
+            return False
+    
+    def push_branch(self, branch_name: str) -> bool:
+        """
+        Push the branch to the remote repository
+        
+        Args:
+            branch_name: Name of the branch to push
+            
+        Returns:
+            bool: True if the push was successful
+        """
+        try:
+            repo = Repo(self.repo_path)
+            
+            # Get the remote
+            origin = repo.remote('origin')
+            
+            # Push the branch
+            origin.push(branch_name)
+            
+            return True
+        except Exception as e:
+            print(f"Error pushing branch: {e}")
+            return False
+    
+    def create_pull_request(self, 
+                          branch_name: str, 
+                          dependency_name: str, 
+                          current_version: str, 
+                          target_version: str,
+                          pr_description: str) -> Dict:
+        """
+        Create a pull request for the dependency upgrade
+        
+        Args:
+            branch_name: Name of the branch
+            dependency_name: Name of the dependency
+            current_version: Current version
+            target_version: Target version
+            pr_description: Description for the pull request
+            
+        Returns:
+            Dict: Pull request details
+        """
+        try:
+            repo = Repo(self.repo_path)
+            
+            # Get the remote URL
+            remote_url = repo.remote('origin').url
+            
+            # Extract owner and repo name from the URL
+            # Assuming a GitHub URL like https://github.com/owner/repo.git
+            # or git@github.com:owner/repo.git
+            if remote_url.startswith('https://'):
+                match = re.match(r'https://github.com/([^/]+)/([^/\.]+)', remote_url)
+                if match:
+                    owner, repo_name = match.groups()
+                else:
+                    return {"success": False, "error": "Could not parse GitHub URL"}
+            else:
+                match = re.match(r'git@github.com:([^/]+)/([^/\.]+)', remote_url)
+                if match:
+                    owner, repo_name = match.groups()
+                else:
+                    return {"success": False, "error": "Could not parse GitHub URL"}
+            
+            # Create PR title
+            pr_title = f"Upgrade {dependency_name} from {current_version} to {target_version}"
+            
+            # Create PR using GitHub API
+            url = f"https://api.github.com/repos/{owner}/{repo_name}/pulls"
+            headers = {
+                "Authorization": f"token {self.github_token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+            data = {
+                "title": pr_title,
+                "body": pr_description,
+                "head": branch_name,
+                "base": "main"  # Assuming the main branch is 'main'
+            }
+            
+            response = requests.post(url, headers=headers, json=data)
+            
+            if response.status_code in [200, 201]:
+                pr_data = response.json()
+                return {
+                    "success": True,
+                    "pr_number": pr_data["number"],
+                    "pr_url": pr_data["html_url"]
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Failed to create PR: {response.status_code} - {response.text}"
+                }
+                
+        except Exception as e:
+            print(f"Error creating pull request: {e}")
+            return {"success": False, "error": str(e)}
+```
+
+## 7. Main Workflow Integration
+
+Now, let's integrate all components into a main workflow.
+
+```python
+# main.py
+import os
+import json
+import argparse
+from typing import Dict, List, Optional
+from dotenv import load_dotenv
+
+from agent_core import AIAgent, Message
+from dependency_scanner import DependencyScanner
+from code_impact_analyzer import CodeImpactAnalyzer
+from test_generator import TestGenerator
+from pr_creator import PRCreator
+
+# Load environment variables
+load_dotenv()
+
+class AutomatedUpgradeWorkflow:
+    def __init__(self, repo_path: str, use_claude: bool = True):
+        """
+        Initialize the automated upgrade workflow
+        
+        Args:
+            repo_path: Path to the repository
+            use_claude: If True, use Claude API, otherwise use OpenAI
+        """
+        self.repo_path = repo_path
+        self.use_claude = use_claude
+        
+        # Initialize components
+        self.agent = AIAgent(use_claude=use_claude)
+        self.scanner = DependencyScanner(repo_path)
+        self.analyzer = CodeImpactAnalyzer(repo_path)
+        self.test_generator = TestGenerator(repo_path)
+        self.pr_creator = PRCreator(repo_path)
+        
+    def run(self, dependency_name: Optional[str] = None, min_severity: str = "medium") -> Dict:
+        """
+        Run the automated upgrade workflow
+        
+        Args:
+            dependency_name: Name of a specific dependency to upgrade (if None, pick highest priority)
+            min_severity: Minimum vulnerability severity to consider
+            
+        Returns:
+            Dict: Results of the workflow
+        """
+        print("🔍 Scanning repository for dependencies...")
+        upgrade_candidates = self.scanner.get_upgrade_candidates(min_severity=min_severity)
+        
+        if not upgrade_candidates:
+            return {
+                "success": False,
+                "message": "No upgrade candidates found"
+            }
+            
+        print(f"📊 Found {len(upgrade_candidates)} upgrade candidates")
+        
+        # If a specific dependency was requested, find it
+        target_dependency = None
+        if dependency_name:
+            for candidate in upgrade_candidates:
+                if candidate["name"] == dependency_name:
+                    target_dependency = candidate
+                    break
+                    
+            if not target_dependency:
+                return {
+                    "success": False,
+                    "message": f"Dependency {dependency_name} not found or doesn't need upgrade"
+                }
+        else:
+            # Otherwise, pick the highest priority dependency
+            target_dependency = upgrade_candidates[0]
+            
+        print(f"🎯 Selected dependency: {target_dependency['name']} (current: {target_dependency['current_version']}, target: {target_dependency['latest_version']})")
+        
+        # Analyze code impact
+        print(f"🔍 Analyzing code impact...")
+        api_usage = self.analyzer.find_dependency_usage(target_dependency["name"])
+        api_examples = self.analyzer.extract_api_usage_examples(target_dependency["name"])
+        breaking_changes = self.analyzer.analyze_breaking_changes(
+            target_dependency["name"],
+            target_dependency["current_version"],
+            target_dependency["latest_version"]
+        )
+        
+        # Get upgrade strategy from AI
+        print(f"🧠 Getting upgrade strategy from AI...")
+        project_info = {
+            "name": os.path.basename(os.path.abspath(self.repo_path)),
+            "type": self.scanner._detect_project_type()
+        }
+        
+        strategy = self.agent.analyze_upgrade_strategy(
+            project_info=project_info,
+            dependencies=[target_dependency],
+            code_samples=api_examples
+        )
+        
+        print(f"📝 AI Upgrade Strategy:\n{strategy}")
+        
+        # Get code changes prediction from AI
+        print(f"🧠 Predicting necessary code changes...")
+        code_changes = self.agent.predict_code_changes(
+            dependency_name=target_dependency["name"],
+            current_version=target_dependency["current_version"],
+            target_version=target_dependency["latest_version"],
+            api_usage_examples=api_examples
+        )
+        
+        print(f"📝 Predicted Code Changes:\n{code_changes}")
+        
+        # Create a branch for the upgrade
+        print(f"🌿 Creating branch for upgrade...")
+        branch_name = self.pr_creator.create_branch(
+            target_dependency["name"],
+            target_dependency["latest_version"]
+        )
+        
+        if not branch_name:
+            return {
+                "success": False,
+                "message": "Failed to create branch"
+            }
+            
+        print(f"✅ Created branch: {branch_name}")
+        
+        # Update the dependency
+        print(f"📦 Updating dependency...")
+        update_success = self.pr_creator.update_dependency(
+            target_dependency["name"],
+            target_dependency["current_version"],
+            target_dependency["latest_version"]
+        )
+        
+        if not update_success:
+            return {
+                "success": False,
+                "message": "Failed to update dependency"
+            }
+            
+        print(f"✅ Updated dependency")
+        
+        # Generate tests
+        print(f"🧪 Generating tests...")
+        changed_apis = [{"name": usage.get("import_path", ""), "context": usage.get("context", "")} for usage in api_usage]
+        
+        test_cases = self.agent.generate_test_cases(
+            dependency_name=target_dependency["name"],
+            changed_apis=changed_apis
+        )
+        
+        print(f"📝 Generated Test Cases:\n{test_cases}")
+        
+        # Write test files
+        test_data = self.test_generator.generate_test_cases(
+            target_dependency["name"],
+            api_usage,
+            breaking_changes.get("breaking_changes", [])
+        )
+        
+        # Commit changes
+        print(f"💾 Committing changes...")
+        commit_success = self.pr_creator.commit_changes(
+            target_dependency["name"],
+            target_dependency["current_version"],
+            target_dependency["latest_version"]
+        )
+        
+        if not commit_success:
+            return {
+                "success": False,
+                "message": "Failed to commit changes"
+            }
+            
+        print(f"✅ Committed changes")
+        
+        # Run tests
+        print(f"🧪 Running tests...")
+        test_results = self.test_generator.run_tests()
+        
+        # Push branch
+        print(f"📤 Pushing branch...")
+        push_success = self.pr_creator.push_branch(branch_name)
+        
+        if not push_success:
+            return {
+                "success": False,
+                "message": "Failed to push branch"
+            }
+            
+        print(f"✅ Pushed branch")
+        
+        # Create PR description
+        print(f"📝 Creating PR description...")
+        pr_description = self.agent.create_pr_description(
+            dependency_updates=[target_dependency],
+            code_changes={"summary": code_changes},
+            test_results=test_results
+        )
+        
+        print(f"📝 PR Description:\n{pr_description}")
+        
+        # Create PR
+        print(f"🔄 Creating pull request...")
+        pr_result = self.pr_creator.create_pull_request(
+            branch_name=branch_name,
+            dependency_name=target_dependency["name"],
+            current_version=target_dependency["current_version"],
+            target_version=target_dependency["latest_version"],
+            pr_description=pr_description
+        )
+        
+        if not pr_result.get("success", False):
+            return {
+                "success": False,
+                "message": f"Failed to create PR: {pr_result.get('error', 'Unknown error')}"
+            }
+            
+        print(f"✅ Created PR: {pr_result.get('pr_url', '')}")
+        
+        return {
+            "success": True,
+            "dependency": target_dependency,
+            "branch_name": branch_name,
+            "pr_number": pr_result.get("pr_number"),
+            "pr_url": pr_result.get("pr_url")
+        }
+
+def main():
+    parser = argparse.ArgumentParser(description="Automated Dependency Upgrade Tool")
+    parser.add_argument("--repo", required=True, help="Path to the repository")
+    parser.add_argument("--dependency", help="Specific dependency to upgrade")
+    parser.add_argument("--min-severity", default="medium", choices=["low", "medium", "high", "critical"], help="Minimum vulnerability severity to consider")
+    parser.add_argument("--use-claude", action="store_true", default=True, help="Use Claude AI (default: True)")
+    
+    args = parser.parse_args()
+    
+    workflow = AutomatedUpgradeWorkflow(args.repo, args.use_claude)
+    result = workflow.run(args.dependency, args.min_severity)
+    
+    if result["success"]:
+        print("\n✅ Upgrade workflow completed successfully!")
+        print(f"Dependency: {result['dependency']['name']} upgraded from {result['dependency']['current_version']} to {result['dependency']['latest_version']}")
+        print(f"Pull Request: {result['pr_url']}")
+    else:
+        print(f"\n❌ Upgrade workflow failed: {result['message']}")
+
+if __name__ == "__main__":
+    main()
+```
+
+## 8. Running the Solution
+
+Let's create a script to run the solution.
+
+```python
+# run.py
+import os
+import argparse
+from dotenv import load_dotenv
+from main import AutomatedUpgradeWorkflow
+
+# Load environment variables
+load_dotenv()
+
+def main():
+    parser = argparse.ArgumentParser(description="Automated Dependency Upgrade Tool")
+    parser.add_argument("--repo", required=True, help="Path to the repository")
+    parser.add_argument("--dependency", help="Specific dependency to upgrade")
+    parser.add_argument("--min-severity", default="medium", choices=["low", "medium", "high", "critical"], help="Minimum vulnerability severity to consider")
+    parser.add_argument("--use-claude", action="store_true", default=True, help="Use Claude AI (default: True)")
+    parser.add_argument("--use-openai", action="store_false", dest="use_claude", help="Use OpenAI instead of Claude")
+    
+    args = parser.parse_args()
+    
+    print("🚀 Starting Automated Dependency Upgrade workflow")
+    print(f"📂 Repository: {args.repo}")
+    print(f"🤖 AI Model: {'Claude' if args.use_claude else 'OpenAI'}")
+    
+    if args.dependency:
+        print(f"📦 Target dependency: {args.dependency}")
+    else:
+        print(f"📦 Scanning for highest priority dependencies (min severity: {args.min_severity})")
+    
+    print("\n" + "="*80 + "\n")
+    
+    workflow = AutomatedUpgradeWorkflow(args.repo, args.use_claude)
+    result = workflow.run(args.dependency, args.min_severity)
+    
+    print("\n" + "="*80 + "\n")
+    
+    if result["success"]:
+        print("\n✅ Upgrade workflow completed successfully!")
+        print(f"Dependency: {result['dependency']['name']} upgraded from {result['dependency']['current_version']} to {result['dependency']['latest_version']}")
+        print(f"Pull Request: {result['pr_url']}")
+    else:
+        print(f"\n❌ Upgrade workflow failed: {result['message']}")
+
+if __name__ == "__main__":
+    main()
+```
+
+To run the solution, use the following command:
+
+```bash
+python run.py --repo /path/to/your/repository [--dependency package-name] [--min-severity medium] [--use-openai]
+```
+
